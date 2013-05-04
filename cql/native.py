@@ -23,11 +23,13 @@ from cql.cursor import Cursor, _VOID_DESCRIPTION, _COUNT_DESCRIPTION
 from cql.apivalues import ProgrammingError, OperationalError
 from cql.query import PreparedQuery, prepare_query, cql_quote_name
 import socket
-import itertools
+
 try:
     from cStringIO import StringIO
 except ImportError:
     from StringIO import StringIO
+
+from collections import deque
 
 
 PROTOCOL_VERSION             = 0x01
@@ -774,7 +776,7 @@ class NativeConnection(Connection):
     cursorclass = NativeCursor
 
     def __init__(self, *args, **kwargs):
-        self.make_reqid = itertools.count().next
+        self.request_ids = deque(range(128))
         self.responses = {}
         self.waiting = {}
         self.conn_ready = False
@@ -860,7 +862,11 @@ class NativeConnection(Connection):
         return self.wait_for_requests(msg)[0]
 
     def send_msg(self, msg):
-        reqid = self.make_reqid()
+        try:
+            reqid = self.request_ids.popleft()
+        except IndexError:
+            raise cql.InternalError('No streams available on connection.')
+
         msg.send(self.socketf, reqid, compression=self.compressor)
         return reqid
 
@@ -902,6 +908,11 @@ class NativeConnection(Connection):
                 waiting_for.remove(r)
         while waiting_for:
             newmsg = read_frame(self.socketf, decompressor=self.decompressor)
+
+            # Recycle the stream ID back onto the available queue.
+            if newmsg.stream_id >= 0:
+                self.request_ids.append(newmsg.stream_id)
+
             if newmsg.stream_id in waiting_for:
                 results[newmsg.stream_id] = newmsg
                 waiting_for.remove(newmsg.stream_id)

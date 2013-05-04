@@ -89,3 +89,14 @@ class TestNativeConnection(unittest.TestCase):
         conn = cql.connect(TEST_HOST, TEST_NATIVE_PORT, native=True, compression=True)
         self.assertEqual(conn.compressor, snappy.compress)
         self.try_basic_stuff(conn)
+
+    def test_many_requests(self):
+        # We should be able to perform over 127 requests (127 is the number of
+        # stream IDs).
+        conn = cql.connect(TEST_HOST, TEST_NATIVE_PORT, native=True)
+        curs = conn.cursor()
+        with self.with_keyspace(curs, conn.cql_version) as ksname:
+            curs.execute('create table data (a int primary key, b int);')
+            for i in range(130):
+                curs.execute('insert into data (a, b) values (:a, :b);',
+                             {'a': i, 'b': i})
